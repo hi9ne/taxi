@@ -8,8 +8,22 @@ from config import OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
 
-# Инициализация OpenAI клиента
-openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+# Lazy initialization of OpenAI client with safety checks
+_openai_client = None
+
+def get_openai_client():
+    """Возвращает экземпляр OpenAI клиента или None при ошибке/отсутствии ключа."""
+    global _openai_client
+    if _openai_client is not None:
+        return _openai_client
+    if not OPENAI_API_KEY:
+        return None
+    try:
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        logger.warning(f"Не удалось инициализировать OpenAI клиент: {e}")
+        _openai_client = None
+    return _openai_client
 
 
 async def validate_and_extract_car_info(photo_file_id: str, bot) -> dict:
@@ -27,8 +41,9 @@ async def validate_and_extract_car_info(photo_file_id: str, bot) -> dict:
             'message': str
         }
     """
-    if not openai_client:
-        logger.warning("OPENAI_API_KEY не установлен, пропускаем проверку фото")
+    client = get_openai_client()
+    if not client:
+        logger.warning("OPENAI_API_KEY не установлен или OpenAI клиент недоступен, пропускаем проверку фото")
         return {
             'is_valid': True,
             'car_number': None,
@@ -89,7 +104,7 @@ async def validate_and_extract_car_info(photo_file_id: str, bot) -> dict:
 9. В ответе car_number должен содержать ТОЛЬКО буквы и цифры, без пробелов, дефисов и других символов
 """
         
-        response = openai_client.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
