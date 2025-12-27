@@ -16,6 +16,7 @@ apscheduler==3.10.4
 python-dotenv==1.0.0
 pytz==2024.1
 openai==1.12.0
+httpx==0.23.3
 
 # Миграции БД (опционально)
 alembic==1.13.1
