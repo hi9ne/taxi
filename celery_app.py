@@ -1,6 +1,11 @@
 # celery_app.py - Настройка Celery для очередей уведомлений
 # Использует Redis как брокер сообщений
 
+import os
+import sys
+# Ensure project root is importable so celery autodiscover can find local modules like `tasks`
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
 from celery import Celery
 from config import REDIS_URL, TIMEZONE
 
