@@ -10,6 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.exceptions import TelegramNetworkError
 
 from config import BOT_TOKEN, CHANNEL_ID
 from database.db import init_db, close_db
@@ -65,6 +66,19 @@ async def main():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
     
+    # Глобальный обработчик сетевых ошибок (таймауты)
+    @dp.errors()
+    async def error_handler(event, exception):
+        """Глобальный обработчик ошибок - предотвращает падение бота при сетевых проблемах"""
+        if isinstance(exception, TelegramNetworkError):
+            # Игнорируем сетевые ошибки (таймауты) - они не критичны
+            # aiogram автоматически переподключится
+            logger.warning(f"⚠️ Сетевая ошибка (таймаут) при обработке обновления: {exception.message}")
+            return True  # Возвращаем True чтобы aiogram не логировал как критичную ошибку
+        # Для других ошибок - логируем
+        logger.error(f"❌ Необработанная ошибка: {exception}", exc_info=True)
+        return False  # Позволяем aiogram логировать другие ошибки
+    
     # Регистрация роутеров (порядок важен!)
     try:
         dp.include_router(start_router)
@@ -79,6 +93,7 @@ async def main():
     except Exception as e:
         logger.error(f"❌ Ошибка регистрации роутеров: {e}", exc_info=True)
         raise
+    
     
     # Запуск воркера истечения объявлений
     try:
