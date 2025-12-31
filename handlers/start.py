@@ -14,7 +14,7 @@ from database.db import get_session
 from database.models import User, Post
 from utils.message_cleaner import clean_chat
 from utils.helpers import format_local_time
-from utils.retry_utils import safe_message_answer, safe_callback_message_edit
+from utils.retry_utils import safe_message_answer, safe_callback_message_edit, retry_on_database_error
 from keyboards import get_role_keyboard, get_main_menu_keyboard, get_remove_keyboard, get_agreement_keyboard
 from states import Agreement
 
@@ -165,90 +165,114 @@ async def decline_agreement(callback: CallbackQuery, state: FSMContext):
 
 async def show_post_from_channel(message: Message, post_id: int):
     """Показать информацию об объявлении из канала"""
-    async with get_session() as session:
+    async def _get_post_info(session):
         # Получаем текущего пользователя
-        current_user_query = select(User).where(User.telegram_id == message.from_user.id)
-        current_user_result = await session.execute(current_user_query)
-        current_user = current_user_result.scalar_one_or_none()
+        user_query = select(User).where(User.telegram_id == message.from_user.id)
+        user_result = await session.execute(user_query)
+        user = user_result.scalars().first()
+        
+        if not user:
+            return None, None, None
         
         # Получаем объявление
-        query = select(Post).where(Post.id == post_id)
-        result = await session.execute(query)
-        post = result.scalar_one_or_none()
+        post_query = select(Post).where(Post.id == post_id)
+        post_result = await session.execute(post_query)
+        post = post_result.scalars().first()
         
-        if not post or post.status == "deleted":
-            await message.answer(
-                "❌ Объявление не найдено или удалено.",
-                parse_mode="HTML"
-            )
-            return
+        if not post:
+            return user, None, None
         
         # Получаем автора
         author_query = select(User).where(User.id == post.author_id)
         author_result = await session.execute(author_query)
         author = author_result.scalar_one_or_none()
         
-        if not author:
-            await message.answer("❌ Автор объявления не найден.")
-            return
-        
-        # Проверяем, является ли текущий пользователь автором
-        is_author = current_user and current_user.id == post.author_id
-        
-        # Формируем текст
-        role_emoji = "🚗" if post.role == "driver" else "🚶"
-        role_text = "ВОДИТЕЛЬ" if post.role == "driver" else "ПАССАЖИР"
-        seats_line = f"🪑 <b>Мест:</b> {post.seats}\n" if post.seats else ""
-        rating_display = f"{float(author.rating):.1f}"
-        expires_time = format_local_time(post.expires_at)
-        
-        if is_author:
-            # Для автора - показываем информацию с кнопками управления
-            text = (
-                f"📋 <b>Ваше объявление</b>\n\n"
-                f"{role_emoji} <b>{role_text}</b>\n\n"
-                f"📍 <b>Откуда:</b> {post.from_place}\n"
-                f"📍 <b>Куда:</b> {post.to_place}\n"
-                f"⏰ <b>Время:</b> {post.departure_time or 'Не указано'}\n"
-                f"{seats_line}"
-                f"💰 <b>Цена:</b> {post.price} сом\n\n"
-                f"⏰ <b>Активно до:</b> {expires_time}\n"
-                f"📊 <b>Статус:</b> {'Активно' if post.status == 'active' else 'Приостановлено'}"
-            )
-            
-            from handlers.my_posts import get_post_actions_keyboard
-            from keyboards import get_back_to_menu_keyboard
-            
-            if post.status in ["active", "paused"]:
-                keyboard = get_post_actions_keyboard(post.id, post.status)
-            else:
-                keyboard = get_back_to_menu_keyboard()
-        else:
-            # Для других пользователей - показываем кнопку "Связаться"
-            text = (
-                f"{role_emoji} <b>{role_text}</b>\n\n"
-                f"📍 <b>Откуда:</b> {post.from_place}\n"
-                f"📍 <b>Куда:</b> {post.to_place}\n"
-                f"⏰ <b>Время:</b> {post.departure_time or 'Не указано'}\n"
-                f"{seats_line}"
-                f"💰 <b>Цена:</b> {post.price} сом\n"
-                f"⭐ <b>Рейтинг:</b> {rating_display}\n\n"
-                f"⏰ <b>Активно до:</b> {expires_time}"
-            )
-            
-            from keyboards import get_contact_keyboard, get_back_to_menu_keyboard
-            
-            # Показываем кнопку "Связаться" только если объявление активно
-            if post.status == "active":
-                keyboard = get_contact_keyboard(author.phone, author.telegram_id)
-            else:
-                keyboard = get_back_to_menu_keyboard()
-        
+        return user, post, author
+    
+    try:
+        user, post, author = await retry_on_database_error(_get_post_info)
+    except Exception as e:
+        logger.error(f"Ошибка при получении данных для поста {post_id}: {e}")
+        await message.answer("❌ Не удалось загрузить информацию об объявлении. Попробуйте позже.")
+        return
+    
+    if not user:
         await message.answer(
-            text,
-            parse_mode="HTML",
-            reply_markup=keyboard
+            "❌ <b>Ошибка</b>\n\n"
+            "Пользователь не найден. Пожалуйста, перезапустите бота командой /start",
+            parse_mode="HTML"
         )
+        return
+    
+    if not post:
+        await message.answer(
+            "❌ <b>Объявление не найдено</b>\n\n"
+            "Возможно, оно было удалено или истекло.",
+            parse_mode="HTML"
+        )
+        return
+    
+    if not author:
+        await message.answer("❌ Автор объявления не найден.")
+        return
+    
+    # Проверяем, является ли текущий пользователь автором
+    is_author = user.id == post.author_id
+    
+    # Формируем текст
+    role_emoji = "🚗" if post.role == "driver" else "🚶"
+    role_text = "ВОДИТЕЛЬ" if post.role == "driver" else "ПАССАЖИР"
+    seats_line = f"🪑 <b>Мест:</b> {post.seats}\n" if post.seats else ""
+    rating_display = f"{float(author.rating):.1f}"
+    expires_time = format_local_time(post.expires_at)
+    
+    if is_author:
+        # Для автора - показываем информацию с кнопками управления
+        text = (
+            f"📋 <b>Ваше объявление</b>\n\n"
+            f"{role_emoji} <b>{role_text}</b>\n\n"
+            f"📍 <b>Откуда:</b> {post.from_place}\n"
+            f"📍 <b>Куда:</b> {post.to_place}\n"
+            f"⏰ <b>Время:</b> {post.departure_time or 'Не указано'}\n"
+            f"{seats_line}"
+            f"💰 <b>Цена:</b> {post.price} сом\n\n"
+            f"⏰ <b>Активно до:</b> {expires_time}\n"
+            f"📊 <b>Статус:</b> {'Активно' if post.status == 'active' else 'Приостановлено'}"
+        )
+        
+        from handlers.my_posts import get_post_actions_keyboard
+        from keyboards import get_back_to_menu_keyboard
+        
+        if post.status in ["active", "paused"]:
+            keyboard = get_post_actions_keyboard(post.id, post.status)
+        else:
+            keyboard = get_back_to_menu_keyboard()
+    else:
+        # Для других пользователей - показываем кнопку "Связаться"
+        text = (
+            f"{role_emoji} <b>{role_text}</b>\n\n"
+            f"📍 <b>Откуда:</b> {post.from_place}\n"
+            f"📍 <b>Куда:</b> {post.to_place}\n"
+            f"⏰ <b>Время:</b> {post.departure_time or 'Не указано'}\n"
+            f"{seats_line}"
+            f"💰 <b>Цена:</b> {post.price} сом\n"
+            f"⭐ <b>Рейтинг:</b> {rating_display}\n\n"
+            f"⏰ <b>Активно до:</b> {expires_time}"
+        )
+        
+        from keyboards import get_contact_keyboard, get_back_to_menu_keyboard
+        
+        # Показываем кнопку "Связаться" только если объявление активно
+        if post.status == "active":
+            keyboard = get_contact_keyboard(author.phone, author.telegram_id)
+        else:
+            keyboard = get_back_to_menu_keyboard()
+    
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
 
 
 async def get_main_menu_text(user_name: str, user: User, session) -> Tuple[str, bool]:

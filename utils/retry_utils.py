@@ -7,6 +7,56 @@ from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 logger = logging.getLogger(__name__)
 
 
+async def retry_on_database_error(
+    func: Callable,
+    max_retries: int = 2,
+    delay: float = 1.0,
+    *args,
+    **kwargs
+) -> Any:
+    """
+    Повторная попытка выполнения функции при ошибках БД
+    
+    Args:
+        func: Функция для выполнения
+        max_retries: Максимальное количество попыток
+        delay: Задержка между попытками в секундах
+        *args, **kwargs: Аргументы функции
+    
+    Returns:
+        Результат выполнения функции
+    
+    Raises:
+        Последнее исключение, если все попытки неудачны
+    """
+    last_exception = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            last_exception = e
+            error_msg = str(e)
+            
+            # Проверяем, что это ошибка таймаута БД
+            if ("timeout" in error_msg.lower() or 
+                "Request timeout error" in error_msg or
+                "generator didn't stop after athrow" in error_msg):
+                
+                if attempt < max_retries:
+                    logger.warning(f"Ошибка БД (попытка {attempt + 1}/{max_retries + 1}): {e}")
+                    await asyncio.sleep(delay * (2 ** attempt))  # Экспоненциальная задержка
+                else:
+                    logger.error(f"Все попытки БД завершились ошибкой: {e}")
+            else:
+                # Для других ошибок не повторяем, просто пробрасываем дальше
+                logger.error(f"Не ошибка таймаута БД: {e}")
+                raise
+    
+    if last_exception:
+        raise last_exception
+
+
 async def retry_on_network_error(
     func: Callable,
     max_retries: int = 2,

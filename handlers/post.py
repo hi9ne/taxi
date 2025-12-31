@@ -17,7 +17,7 @@ from services.matching import find_matching_subscriptions, get_users_to_notify, 
 from tasks.notifications import send_match_notification
 from config import MAX_PRICE, POST_LIFETIME_MINUTES
 from utils.message_cleaner import add_message_to_delete, clean_chat
-from utils.retry_utils import safe_callback_message_edit
+from utils.retry_utils import safe_callback_message_edit, retry_on_database_error
 from keyboards import (
     get_cancel_keyboard,
     get_back_cancel_keyboard,
@@ -36,24 +36,15 @@ logger = logging.getLogger(__name__)
 
 @router.callback_query(F.data == "create_post")
 async def start_create_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """Начало создания объявления"""
-    await callback.answer()
-    
-    # Очищаем предыдущие сообщения перед началом нового диалога
-    await clean_chat(bot, callback.from_user.id, state)
-    await state.update_data(messages_to_delete=[])
-    
-    # Проверяем регистрацию
-    async with get_session() as session:
-        query = select(User).where(User.telegram_id == callback.from_user.id)
-        result = await session.execute(query)
-        user = result.scalar_one_or_none()
+    """Начало создания объявления - проверка активных объявлений"""
+    async def _check_active_post(session):
+        # Получаем пользователя
+        user_query = select(User).where(User.telegram_id == callback.from_user.id)
+        user_result = await session.execute(user_query)
+        user = user_result.scalars().first()
         
         if not user:
-            await callback.message.edit_text(
-                "❌ Вы не зарегистрированы. Используйте /start"
-            )
-            return
+            return None, None
         
         # Проверяем наличие АКТИВНОГО объявления (приостановленные не блокируют)
         active_post_query = select(Post).where(
@@ -63,33 +54,52 @@ async def start_create_post(callback: CallbackQuery, state: FSMContext, bot: Bot
         active_post_result = await session.execute(active_post_query)
         active_post = active_post_result.scalars().first()
         
-        if active_post:
-            # У пользователя уже есть активное объявление
-            # Удаляем предыдущее сообщение
-            try:
-                await callback.message.delete()
-            except:
-                pass
-            
-            # Отправляем новое сообщение с информацией о существующем объявлении
-            await callback.message.answer(
-                f"⚠️ <b>У вас уже есть активное объявление</b>\n\n"
-                f"📍 {active_post.from_place} → {active_post.to_place}\n"
-                f"🕐 {active_post.departure_time}\n"
-                f"Статус: 🟢 активно\n\n"
-                f"Чтобы создать новое объявление, сначала удалите или приостановите текущее.",
-                parse_mode="HTML",
-                reply_markup=get_existing_post_keyboard(active_post.id, active_post.status)
-            )
-            return
-        
-        # Сохраняем данные пользователя в state
-        await state.update_data(
-            user_id=user.id,
-            role=user.role,
-            user_phone=user.phone,
-            user_rating=str(user.rating)
+        return user, active_post
+    
+    try:
+        user, active_post = await retry_on_database_error(_check_active_post)
+    except Exception as e:
+        logger.error(f"Ошибка при проверке активного объявления: {e}")
+        await callback.answer("❌ Ошибка при проверке объявлений. Попробуйте позже.", show_alert=True)
+        return
+    
+    if not user:
+        await callback.message.edit_text(
+            "❌ Вы не зарегистрированы. Используйте /start"
         )
+        return
+    
+    if active_post:
+        # У пользователя уже есть активное объявление
+        # Удаляем предыдущее сообщение
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        
+        # Отправляем новое сообщение с информацией о существующем объявлении
+        await callback.message.answer(
+            f"⚠️ <b>У вас уже есть активное объявление</b>\n\n"
+            f"📍 {active_post.from_place} → {active_post.to_place}\n"
+            f"🕐 {active_post.departure_time}\n"
+            f"Статус: 🟢 активно\n\n"
+            f"Чтобы создать новое объявление, сначала удалите или приостановите текущее.",
+            parse_mode="HTML",
+            reply_markup=get_existing_post_keyboard(active_post.id, active_post.status)
+        )
+        return
+    
+    # Сохраняем данные пользователя в state
+    await state.update_data(
+        user_id=user.id,
+        role=user.role,
+        user_phone=user.phone,
+        user_rating=str(user.rating)
+    )
+    
+    # Очищаем предыдущие сообщения перед началом нового диалога
+    await clean_chat(bot, callback.from_user.id, state)
+    await state.update_data(messages_to_delete=[])
     
     # Шаг 1: Откуда
     msg = await callback.message.answer(
