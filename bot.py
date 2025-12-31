@@ -47,8 +47,13 @@ async def main():
     logger.info("Инициализация бота...")
     
     # Инициализация базы данных
-    await init_db()
-    logger.info("База данных инициализирована")
+    try:
+        await init_db()
+        logger.info("База данных инициализирована")
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации базы данных: {e}", exc_info=True)
+        logger.error("Проверьте DATABASE_URL и доступность PostgreSQL")
+        raise
     
     # Создание бота и диспетчера
     bot = Bot(
@@ -61,28 +66,38 @@ async def main():
     dp = Dispatcher(storage=storage)
     
     # Регистрация роутеров (порядок важен!)
-    dp.include_router(start_router)
-    dp.include_router(registration_router)
-    dp.include_router(post_router)
-    dp.include_router(subscriptions_router)
-    dp.include_router(my_posts_router)
-    dp.include_router(profile_router)
-    dp.include_router(rating_router)
-    dp.include_router(callbacks_router)
-    
-    logger.info("Роутеры зарегистрированы")
+    try:
+        dp.include_router(start_router)
+        dp.include_router(registration_router)
+        dp.include_router(post_router)
+        dp.include_router(subscriptions_router)
+        dp.include_router(my_posts_router)
+        dp.include_router(profile_router)
+        dp.include_router(rating_router)
+        dp.include_router(callbacks_router)
+        logger.info("Роутеры зарегистрированы")
+    except Exception as e:
+        logger.error(f"❌ Ошибка регистрации роутеров: {e}", exc_info=True)
+        raise
     
     # Запуск воркера истечения объявлений
-    start_expiration_worker(bot)
-    logger.info("Воркер истечения запущен")
+    try:
+        start_expiration_worker(bot)
+        logger.info("Воркер истечения запущен")
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска воркера истечения: {e}", exc_info=True)
+        raise
     
     try:
         # Удаляем вебхук если был установлен
+        logger.info("Удаление вебхука...")
         await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Вебхук удалён")
         
         # Получаем информацию о боте
+        logger.info("Проверка подключения к Telegram API...")
         bot_info = await bot.get_me()
-        logger.info(f"Бот запущен: @{bot_info.username}")
+        logger.info(f"✅ Бот запущен: @{bot_info.username} (ID: {bot_info.id})")
         
         # Отправляем закрепленное сообщение с кнопкой в канал
         if CHANNEL_ID:
