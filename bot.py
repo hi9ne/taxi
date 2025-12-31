@@ -50,14 +50,10 @@ async def main():
     await init_db()
     logger.info("База данных инициализирована")
     
-    # Создание бота и диспетчера с увеличенными таймаутами
+    # Создание бота и диспетчера
     bot = Bot(
         token=BOT_TOKEN,
-        default=DefaultBotProperties(
-            parse_mode=ParseMode.HTML,
-            # Увеличиваем таймауты для стабильности
-            disable_web_page_preview=True,
-        )
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     
     # Используем MemoryStorage для FSM (для продакшн рекомендуется Redis)
