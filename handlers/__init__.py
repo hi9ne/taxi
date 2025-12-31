@@ -1,5 +1,6 @@
 # handlers/__init__.py
 from handlers.start import router as start_router
+from handlers.onboarding import router as onboarding_router
 from handlers.registration import router as registration_router
 from handlers.post import router as post_router
 from handlers.subscriptions import router as subscriptions_router
@@ -10,6 +11,7 @@ from handlers.callbacks import router as callbacks_router
 
 __all__ = [
     "start_router",
+    "onboarding_router",
     "registration_router",
     "post_router",
     "subscriptions_router",
