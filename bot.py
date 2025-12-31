@@ -89,15 +89,24 @@ async def main():
         raise
     
     try:
-        # Удаляем вебхук если был установлен
-        logger.info("Удаление вебхука...")
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Вебхук удалён")
+        # Удаляем вебхук если был установлен (не критично, если не получится)
+        try:
+            logger.info("Удаление вебхука...")
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Вебхук удалён")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось удалить webhook (это не критично): {e}")
+            logger.info("Продолжаем запуск бота...")
         
         # Получаем информацию о боте
         logger.info("Проверка подключения к Telegram API...")
-        bot_info = await bot.get_me()
-        logger.info(f"✅ Бот запущен: @{bot_info.username} (ID: {bot_info.id})")
+        try:
+            bot_info = await bot.get_me()
+            logger.info(f"✅ Бот запущен: @{bot_info.username} (ID: {bot_info.id})")
+        except Exception as e:
+            logger.error(f"❌ Не удалось подключиться к Telegram API: {e}")
+            logger.error("Проверьте BOT_TOKEN и доступность api.telegram.org")
+            raise
         
         # Отправляем закрепленное сообщение с кнопкой в канал
         if CHANNEL_ID:
