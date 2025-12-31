@@ -101,19 +101,34 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 "❗ Без согласия доступ к сервису невозможен."
             )
             
-            await message.answer(
-                agreement_text,
-                parse_mode="HTML",
-                reply_markup=get_agreement_keyboard()
-            )
+            try:
+                await message.answer(
+                    agreement_text,
+                    parse_mode="HTML",
+                    reply_markup=get_agreement_keyboard()
+                )
+            except TelegramNetworkError as e:
+                logger.warning(f"Сетевая ошибка при отправке соглашения пользователю {message.from_user.id}: {e}")
+                # Пробуем повторить запрос один раз
+                try:
+                    await message.answer(
+                        agreement_text,
+                        parse_mode="HTML",
+                        reply_markup=get_agreement_keyboard()
+                    )
+                except TelegramNetworkError as e2:
+                    logger.error(f"Повторная ошибка при отправке соглашения: {e2}")
+                    return
+            except Exception as e:
+                logger.error(f"Ошибка при отправке соглашения пользователю {message.from_user.id}: {e}", exc_info=True)
+                return
             await state.set_state(Agreement.waiting_agreement)
 
 
 @router.callback_query(F.data == "agreement:accept", Agreement.waiting_agreement)
 async def accept_agreement(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Пользователь согласился с правилами"""
-    from utils.helpers import safe_answer_callback
-    await safe_answer_callback(callback)
+    await callback.answer()
     
     # Удаляем сообщение с предупреждением
     try:
@@ -131,19 +146,34 @@ async def accept_agreement(callback: CallbackQuery, state: FSMContext, bot: Bot)
         "<b>Выберите кто вы:</b>"
     )
     
-    await callback.message.answer(
-        welcome_text,
-        parse_mode="HTML",
+    try:
+        await callback.message.answer(
+            welcome_text,
+            parse_mode="HTML",
+            reply_markup=get_role_keyboard()
+        )
+    except TelegramNetworkError as e:
+        logger.warning(f"Сетевая ошибка при отправке приветствия пользователю {callback.from_user.id}: {e}")
+        # Пробуем повторить запрос один раз
+        try:
+            await callback.message.answer(
+                welcome_text,
+                parse_mode="HTML",
                 reply_markup=get_role_keyboard()
             )
+        except TelegramNetworkError as e2:
+            logger.error(f"Повторная ошибка при отправке приветствия: {e2}")
+            return
+    except Exception as e:
+        logger.error(f"Ошибка при отправке приветствия пользователю {callback.from_user.id}: {e}", exc_info=True)
+        return
     await state.clear()
 
 
 @router.callback_query(F.data == "agreement:decline", Agreement.waiting_agreement)
 async def decline_agreement(callback: CallbackQuery, state: FSMContext):
     """Пользователь отказался от согласия"""
-    from utils.helpers import safe_answer_callback
-    await safe_answer_callback(callback, "❌ Без согласия доступ к сервису невозможен", show_alert=True)
+    await callback.answer("❌ Без согласия доступ к сервису невозможен", show_alert=True)
     
     await callback.message.edit_text(
         "❌ <b>Доступ запрещён</b>\n\n"
@@ -304,8 +334,7 @@ async def show_main_menu(message: Message, user: User, session):
 @router.callback_query(F.data == "main_menu")
 async def callback_main_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Возврат в главное меню через callback"""
-    from utils.helpers import safe_answer_callback
-    await safe_answer_callback(callback)
+    await callback.answer()
     # Очищаем все предыдущие сообщения при возврате в главное меню
     await clean_chat(bot, callback.from_user.id, state)
     await state.clear()
@@ -332,8 +361,7 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext, bot: Bo
 @router.callback_query(F.data == "help")
 async def show_help(callback: CallbackQuery):
     """Показать помощь"""
-    from utils.helpers import safe_answer_callback
-    await safe_answer_callback(callback)
+    await callback.answer()
     
     help_text = (
         "❓ <b>Как пользоваться ботом</b>\n\n"

@@ -39,7 +39,18 @@ async def get_session():
         except Exception as e:
             await session.rollback()
             logger.error(f"Ошибка БД: {e}")
-            raise
+            # Если это таймаут, пробуем еще раз
+            if "timeout" in str(e).lower() or "Request timeout error" in str(e):
+                logger.warning("Обнаружен таймаут БД, пробуем повторно...")
+                try:
+                    yield session
+                    await session.commit()
+                    logger.info("Повторная операция с БД успешна")
+                except Exception as retry_e:
+                    logger.error(f"Повторная ошибка БД: {retry_e}")
+                    raise retry_e
+            else:
+                raise
 
 
 async def init_db():

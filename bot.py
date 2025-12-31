@@ -10,7 +10,6 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.exceptions import TelegramNetworkError
 
 from config import BOT_TOKEN, CHANNEL_ID
 from database.db import init_db, close_db
@@ -48,81 +47,58 @@ async def main():
     logger.info("Инициализация бота...")
     
     # Инициализация базы данных
-    try:
-        await init_db()
-        logger.info("База данных инициализирована")
-    except Exception as e:
-        logger.error(f"❌ Ошибка инициализации базы данных: {e}", exc_info=True)
-        logger.error("Проверьте DATABASE_URL и доступность PostgreSQL")
-        raise
+    await init_db()
+    logger.info("База данных инициализирована")
     
-    # Создание бота и диспетчера
+    # Создание бота и диспетчера с увеличенными таймаутами
     bot = Bot(
         token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+        default=DefaultBotProperties(
+            parse_mode=ParseMode.HTML,
+            # Увеличиваем таймауты для стабильности
+            disable_web_page_preview=True,
+        )
     )
     
     # Используем MemoryStorage для FSM (для продакшн рекомендуется Redis)
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
     
-    # Глобальный обработчик сетевых ошибок (таймауты)
-    @dp.errors()
-    async def error_handler(event, exception):
-        """Глобальный обработчик ошибок - предотвращает падение бота при сетевых проблемах"""
-        if isinstance(exception, TelegramNetworkError):
-            # Игнорируем сетевые ошибки (таймауты) - они не критичны
-            # aiogram автоматически переподключится
-            logger.warning(f"⚠️ Сетевая ошибка (таймаут) при обработке обновления: {exception}")
-            return True  # Возвращаем True чтобы aiogram не логировал как критичную ошибку
-        # Для других ошибок - логируем
-        logger.error(f"❌ Необработанная ошибка: {exception}", exc_info=True)
-        return False  # Позволяем aiogram логировать другие ошибки
-    
     # Регистрация роутеров (порядок важен!)
-    try:
-        dp.include_router(start_router)
-        dp.include_router(registration_router)
-        dp.include_router(post_router)
-        dp.include_router(subscriptions_router)
-        dp.include_router(my_posts_router)
-        dp.include_router(profile_router)
-        dp.include_router(rating_router)
-        dp.include_router(callbacks_router)
-        logger.info("Роутеры зарегистрированы")
-    except Exception as e:
-        logger.error(f"❌ Ошибка регистрации роутеров: {e}", exc_info=True)
-        raise
+    dp.include_router(start_router)
+    dp.include_router(registration_router)
+    dp.include_router(post_router)
+    dp.include_router(subscriptions_router)
+    dp.include_router(my_posts_router)
+    dp.include_router(profile_router)
+    dp.include_router(rating_router)
+    dp.include_router(callbacks_router)
     
+    logger.info("Роутеры зарегистрированы")
     
     # Запуск воркера истечения объявлений
-    try:
-        start_expiration_worker(bot)
-        logger.info("Воркер истечения запущен")
-    except Exception as e:
-        logger.error(f"❌ Ошибка запуска воркера истечения: {e}", exc_info=True)
-        raise
+    start_expiration_worker(bot)
+    logger.info("Воркер истечения запущен")
     
     try:
-        # Удаляем вебхук если был установлен (не критично, если не получится)
-        try:
-            logger.info("Удаление вебхука...")
-            await bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Вебхук удалён")
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось удалить webhook (это не критично): {e}")
-            logger.info("Продолжаем запуск бота...")
+        # Удаляем вебхук если был установлен
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Вебхук удален")
         
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось удалить webhook (это не критично): {e}")
+        # Продолжаем запуск даже если не удалось удалить вебхук
+    
+    try:
         # Получаем информацию о боте
-        logger.info("Проверка подключения к Telegram API...")
-        try:
-            bot_info = await bot.get_me()
-            logger.info(f"✅ Бот запущен: @{bot_info.username} (ID: {bot_info.id})")
-        except Exception as e:
-            logger.error(f"❌ Не удалось подключиться к Telegram API: {e}")
-            logger.error("Проверьте BOT_TOKEN и доступность api.telegram.org")
-            raise
+        bot_info = await bot.get_me()
+        logger.info(f"✅ Бот запущен: @{bot_info.username} (ID: {bot_info.id})")
         
+    except Exception as e:
+        logger.error(f"❌ Не удалось получить информацию о боте: {e}")
+        return
+    
+    try:
         # Отправляем закрепленное сообщение с кнопкой в канал
         if CHANNEL_ID:
             try:
@@ -134,18 +110,14 @@ async def main():
                 logger.warning(f"⚠️ Ошибка при отправке закрепленного сообщения: {e}")
                 logger.info("💡 Убедитесь, что бот является администратором канала")
         
-        # Запуск polling с настройками для надежности
-        logger.info("Запуск polling для получения обновлений...")
-        await dp.start_polling(
-            bot,
-            allowed_updates=["message", "callback_query", "edited_message"],
-            close_bot_session=False
-        )
+        logger.info("Продолжаем запуск бота...")
+        logger.info("Проверка подключения к Telegram API...")
         
-    except KeyboardInterrupt:
-        logger.info("Получен сигнал остановки")
+        # Запуск polling
+        await dp.start_polling(bot)
+        
     except Exception as e:
-        logger.error(f"Критическая ошибка при работе бота: {e}", exc_info=True)
+        logger.error(f"Ошибка при запуске бота: {e}")
         raise
     
     finally:
